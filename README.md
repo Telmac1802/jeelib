@@ -12,18 +12,15 @@ Included example RF12demo_SPI.ino (a modified RF12demo.ino) is working on boards
   Jeenode, Arduino Uno, Arduino Nano, Arduino Mini Pro, Arduino ATmega 2560,
   
   ATmega328PB with MiniCore: https://mcudude.github.io/MiniCore/package_MCUdude_MiniCore_index.json ,
-  
   Arduino Nano Every; http://downloads.arduino.cc/packages/package_avr_7.3.0_index.json
   
   LGT8F328 with core LGT8fx boards by buezas: https://raw.githubusercontent.com/dbuezas/lgt8fx/master/package_lgt8fx_index.json
   
   ESP8266 (Wemos D1 R1 Mini): http://arduino.esp8266.com/stable/package_esp8266com_index.json, 
-  
   ESP32 (DOIT ESP32 DEVKIT V1): https://dl.espressif.com/dl/package_esp32_index.json, 
   
   STM32F103C8 (Blue Pill), STM32F103CBT6 (Maple Mini) with 
   STMduino.com core (Roger Clarck) http://dan.drown.org/stm32duino/package_STM32duino_index.json and 
-  
   STM32 (official) core https://github.com/stm32duino/BoardManagerFiles/raw/master/STM32/package_stm_index.json
   
 Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports.h, Ports.cpp, PortsSHT11.cpp
