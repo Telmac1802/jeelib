@@ -27,12 +27,12 @@ Included example RF12demo_SPI.ino (a modified RF12demo.ino) is working on boards
   
   STMduino.com core (Roger Clarck) http://dan.drown.org/stm32duino/package_STM32duino_index.json and 
   
-  STM32 (official) core https://github.com/stm32duino/BoardManagerFiles/raw/master/STM32/package_stm_index.json
+  STM32 (official) core https://github.com/stm32duino/BoardManagerFiles/raw/master/STM32/package_stm_index.json.
 
 Other MCUs than AVR dont have dedicated EEPROM and dont restore radio settings when programin with a different sketch.
 
-Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports.h, Ports.cpp, PortsSHT11.cpp
-Added files to JeeLib: RF69_avr1.h, crc16.h
+Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports.h, Ports.cpp, PortsSHT11.cpp. 
+Added files to JeeLib: RF69_avr1.h and crc16.h.
 
 Original JeeLib support continue to JeeNode and atmega328PA. Due errors in compiling Ports.cpp to other MCU:s there is no
 or partial support to LuxPlug, ColorPlug, InputPlug, InfraredPlug, Sleep modes and PowerDown, -Saving. Not tryed  
@@ -44,11 +44,11 @@ Needed two hardware serial ports. Using MiniCore + SPI1 + Atmega328PB made it po
 ESP32 and STM32F103X can use two SPI-bus. Used aither SPI or SPI1 succesfylly - see RF12demo_SPI.ino. 
 Using both SPI and SPI1 bus on the same sketch is not supported.
 
-Used radio modules RFM12b (#define RF69_COMPAT 0) or RFM69CW (#define RF69_COMPAT 1) 
+Used radio modules RFM12b (#define RF69_COMPAT 0) or RFM69CW (#define RF69_COMPAT 1). 
 
 SPI and SPI1 are supported. SPI is default. No software-SPI implementeed.
 
-if SPI1 is used, "#define JEELIB_SPI1 1" in RF12.h  is needed 
+if SPI1 is used, "#define JEELIB_SPI1 1" in RF12.h  is needed. 
 
 if SPI1 and RFM69CW is used, "#define JEELIB_SPI1 1" and "#define RF69_COMPAT 1" is needed in RF12.h and
 "#define JEELIB_SPI1 1" in RF69.cpp and RF69_compat.cpp is needed.
