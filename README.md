@@ -8,7 +8,8 @@ The home page for this library is at <https://jeelabs.net/projects/jeelib/wiki>.
 [2]: https://jeelabs.org/
 
 
-This jeelib library is forked to use Arduino SPI library with radios RFM12b and RFM69CW. 
+This jeelib library is forked to use Arduino SPI library with radios RFM12b and RFM69CW. Arduino version 1.8.10 is used.
+
 Included example RF12demo_SPI.ino (a modified RF12demo.ino) is working on boards or microcontrollers: 
   Jeenode, Arduino Uno, Arduino Nano, Arduino Mini Pro, Arduino ATmega 2560,
   
@@ -27,7 +28,9 @@ Included example RF12demo_SPI.ino (a modified RF12demo.ino) is working on boards
   STMduino.com core (Roger Clarck) http://dan.drown.org/stm32duino/package_STM32duino_index.json and 
   
   STM32 (official) core https://github.com/stm32duino/BoardManagerFiles/raw/master/STM32/package_stm_index.json
-  
+
+Other MCUs than AVR dont have dedicated EEPROM and dont restore radio settings when programin with a different sketch.
+
 Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports.h, Ports.cpp, PortsSHT11.cpp
 Added files to JeeLib: RF69_avr1.h, crc16.h
 
@@ -49,3 +52,6 @@ if SPI1 is used, "#define JEELIB_SPI1 1" in RF12.h  is needed
 
 if SPI1 and RFM69CW is used, "#define JEELIB_SPI1 1" and "#define RF69_COMPAT 1" is needed in RF12.h and
 "#define JEELIB_SPI1 1" in RF69.cpp and RF69_compat.cpp is needed.
+
+This library must locate in username/Arduino/libraries/jeelib subfolder. The original jeelib subfolder must be renamed something like "jeelib_original" as long you use this fork. Arduino linker finds two jeelib but uses the one with subfolder name "jeelib". When not using this library, rename the subfolfer "jeelib" to  "jeelib_SPI" and "jeelib_original" to "jeelib" and everything is like in good old jeelib days.
+I hope this fork is useful to someone.
