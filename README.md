@@ -34,8 +34,12 @@ Needed two hardware serial ports. Using MiniCore + SPI1 + Atmega328PB made it po
 
 ESP32 and STM32F103X can use two SPI-bus. Used aither SPI or SPI1 succesfylly - see RF12demo_SPI.ino. 
 Using both SPI and SPI1 bus on the same scketc is not supported.
+
 Used radio modules RFM12b (#define RF69_COMPAT 0) or RFM69CW (#define RF69_COMPAT 1) 
+
 SPI and SPI1 are supported. SPI is default. No software-SPI implementeed.
+
 if SPI1 is used, "#define JEELIB_SPI1 1" in RF12.h  is needed 
+
 if SPI1 and RFM69CW is used, "#define JEELIB_SPI1 1" and "#define RF69_COMPAT 1" is needed in RF12.h and
 "#define JEELIB_SPI1 1" in RF69.cpp and RF69_compat.cpp is needed.
