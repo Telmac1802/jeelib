@@ -32,13 +32,14 @@ Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports
 Added files to JeeLib: RF69_avr1.h, crc16.h
 
 Original JeeLib support continue to JeeNode and atmega328PA. Due errors in compiling Ports.cpp to other MCU:s there is no
-or partial support to LuxPlug, ColorPlug, InputPlug, InfraredPlug, Sleep modes and PowerDown, -Saving. 
+or partial support to LuxPlug, ColorPlug, InputPlug, InfraredPlug, Sleep modes and PowerDown, -Saving. Not tryed  
+Jeelabs module working with other MCU than ATMefa328PA.
 
 Main goal to use radio modules RFM12b and RFM69CW with different microcontrollers.
 Needed two hardware serial ports. Using MiniCore + SPI1 + Atmega328PB made it possible.
 
 ESP32 and STM32F103X can use two SPI-bus. Used aither SPI or SPI1 succesfylly - see RF12demo_SPI.ino. 
-Using both SPI and SPI1 bus on the same scketc is not supported.
+Using both SPI and SPI1 bus on the same sketch is not supported.
 
 Used radio modules RFM12b (#define RF69_COMPAT 0) or RFM69CW (#define RF69_COMPAT 1) 
 
