@@ -12,7 +12,17 @@
 #include <WProgram.h> // Arduino 0022
 #endif
 #include <stdint.h>
-#include <avr/pgmspace.h>
+
+#if defined(ARDUINO_ARCH_AVR)
+	#include <avr/pgmspace.h>
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC)
+	#include <pgmspace.h>
+#elif defined  (ESP32)
+	#include <pgmspace.h>
+	#define analogWrite	ledcWrite //https://github.com/espressif/arduino-esp32/issues/4
+#else
+	#include <avr/pgmspace.h>
+#endif
 //#include <util/delay.h>
 
 // tweak this to switch ATtiny84 etc to new Arduino 1.0+ conventions
@@ -75,6 +85,7 @@ protected:
     /// @return Arduino analog pin number of a Port's A pin (uint8_t).
     inline uint8_t anaPin() const
         { return portNum - 1; }
+     
 #else
 	/// @return Arduino digital pin number of a Port's D pin (uint8_t).
     inline uint8_t digiPin() const
@@ -100,7 +111,13 @@ public:
     /// I/O data direction of the DIO pin associated with a specific port.
     /// @param value INPUT or OUTPUT.
     inline void mode(uint8_t value) const
-        { pinMode(digiPin(), value); }
+        { 
+        #if defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) //|| defined(STM32F103xB)
+        	pinMode(digiPin(), (WiringPinMode) value ); 
+        #else
+        pinMode(digiPin(), value); 
+        #endif
+        }
     /// Reads the value of a Port's D pin.
     /// @return High or Low.
     inline uint8_t digiRead() const
@@ -122,7 +139,14 @@ public:
     /// the I/O data direction of the AIO pin associated with a specific port.
     /// @param value INPUT or OUTPUT.
     inline void mode2(uint8_t value) const
-        { pinMode(digiPin2(), value); }
+        { 
+         #if defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) //|| defined(STM32F103xB)
+        	pinMode(digiPin2(), (WiringPinMode) value ); 
+        #else
+        	pinMode(digiPin2(), value); 
+        #endif
+        }
+        
     /// Reads an analog value from a Port's A pin.
     /// @return int [0..1023]
     inline uint16_t anaRead() const
@@ -147,7 +171,13 @@ public:
     /// Note that this is the same pin on all ports.
     /// @param value INPUT or OUTPUT.
     static void mode3(uint8_t value)
-        { pinMode(digiPin3(), value); }
+        { 
+         #if defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) //|| defined(STM32F103xB)
+        	pinMode(digiPin3(), (WiringPinMode) value ); 
+        #else
+        pinMode(digiPin3(), value); 
+        #endif
+        }
     /// Reads the value of the I pin on all Ports.
     /// @return High or Low.
     static uint8_t digiRead3()
@@ -477,6 +507,9 @@ public:
     virtual WRITE_RESULT write(byte);
 };
 
+#if defined (MCU_STM32F103C8)
+
+#else
 /// Interface for the Dimmer Plug - see http://jeelabs.org/dp
 class DimmerPlug : public DeviceI2C {
 public:
@@ -497,6 +530,7 @@ public:
     void setReg(byte reg, byte value) const;
     void setMulti(byte reg, ...) const;
 };
+#endif
 
 /// Interface for the Lux Plug - see http://jeelabs.org/xp
 class LuxPlug : public DeviceI2C {
@@ -504,7 +538,14 @@ class LuxPlug : public DeviceI2C {
 public:
     enum {
         CONTROL, TIMING,
-        THRESHLOWLOW, THRESHLOWHIGH, THRESHHIGHLOW, THRESHHIGHHIGH, INTERRUPT,
+        THRESHLOWLOW, THRESHLOWHIGH, THRESHHIGHLOW, THRESHHIGHHIGH, 
+	#if defined  (ESP32)
+		//INTERRUPT issues C:\Users\*****\AppData\Local\Arduino15\packages\esp32\hardware\esp32\1.0.4/tools/sdk/include/esp32/xtensa/config/specreg.h:82:19: error: expected unqualified-id before numeric constant
+		// #define INTERRUPT 226
+		iNTERRUPT,
+	#else        
+        INTERRUPT,
+    #endif   
         LUXID = 0xA,
         DATA0LOW = 0xC, DATA0HIGH, DATA1LOW, DATA1HIGH,
     };
@@ -609,12 +650,13 @@ public:
     void send(const uint8_t* data, uint16_t bits);
 };
 
+
 /// Interface for the Heading Board - see http://jeelabs.org/hb
 class HeadingBoard : public PortI2C {
     DeviceI2C eeprom, adc, compass;
     Port aux;
     // keep following fields in order:
-    word C1, C2, C3, C4, C5, C6, C7;
+    word CC1, CC2, CC3, CC4, CC5, CC6, CC7; // Replaced "C1" with "CC1" due compiler errors lgt\avr\variants\standard\pins_arduino.h:110:12:
     byte A, B, C, D, setReset;
 
     byte eepromByte(byte reg) const;
@@ -630,6 +672,7 @@ public:
     void pressure(int& temp, int& pres) const;
     void heading(int& xaxis, int& yaxis);
 };
+
 
 /// Interface for the Modern Device 3-axis Compass board.
 /// See http://shop.moderndevice.com/products/3-axis-compass
@@ -691,7 +734,15 @@ class ColorPlug : public DeviceI2C {
     word chromacct[3];
 public:
     enum {
-        CONTROL, TIMING, INTERRUPT, INTERRUPTSOURCE, CPID, GAIN = 0x7,
+        CONTROL, TIMING, 
+#if defined  (ESP32)
+		//INTERRUPT issues C:\Users\*****\AppData\Local\Arduino15\packages\esp32\hardware\esp32\1.0.4/tools/sdk/include/esp32/xtensa/config/specreg.h:82:19: error: expected unqualified-id before numeric constant
+		// #define INTERRUPT 226
+		iNTERRUPT, 
+#else        
+        INTERRUPT, 
+#endif        
+        INTERRUPTSOURCE, CPID, GAIN = 0x7,
         THRESHLOWLOW, THRESHLOWHIGH, THRESHHIGHLOW, THRESHHIGHHIGH,
         DATA0LOW = 0x10, DATA0HIGH, DATA1LOW, DATA1HIGH,
         DATA2LOW, DATA2HIGH, DATA3LOW, DATA3HIGH,
@@ -712,7 +763,7 @@ public:
     // returns four 16-bit values: red, green, blue, and clear intensities
     const word* getData();
     
-    const word* chromaCCT();
+    const word* chromaCCT();    
 };
 
 #ifdef Stream_h // only available in recent Arduino IDE versions
@@ -741,7 +792,13 @@ public:
     InputParser& operator >> (int& v)       { return get(&v, 2); }
     InputParser& operator >> (word& v)      { return get(&v, 2); }
     InputParser& operator >> (long& v)      { return get(&v, 4); }
+#if defined  (ESP32)
+// \Arduino\libraries\Jeelib/Ports.h:761:18: error:
+//'InputParser& InputParser::operator>>(uint32_t&)' cannot be overloaded
+// InputParser& operator >> (uint32_t& v)  { return get(&v, 4); }
+#else
     InputParser& operator >> (uint32_t& v)  { return get(&v, 4); }
+#endif    
     InputParser& operator >> (const char*& v);
 
 private:
@@ -753,6 +810,7 @@ private:
     uint32_t value;
     Commands* cmds;
     Stream& io;
+
 };
 
 #endif // Stream_h

@@ -9,7 +9,7 @@
 #include <WProgram.h> // Arduino 0022
 #endif
 
-#define DEBUG 0
+#define DEBUG 1
 
 void RF12::initBuf(uint8_t base) {
     txbase = base;

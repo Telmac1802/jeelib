@@ -2,36 +2,161 @@
 /// RFM12B driver implementation
 // 2009-02-09 <jc@wippler.nl> http://opensource.org/licenses/mit-license.php
 
-#include "RF12.h"
-#include <avr/io.h>
-#include <util/crc16.h>
-#include <avr/eeprom.h>
-#include <avr/sleep.h>
 #if ARDUINO >= 100
 #include <Arduino.h> // Arduino 1.0
 #else
 #include <WProgram.h> // Arduino 0022
 #endif
 
-#if RF12_COMPAT
-#define rf12_rawlen     rf12_buf[1]
-#define rf12_dest       (rf12_buf[2] & RF12_HDR_MASK)
-#define rf12_orig       (rf12_buf[3] & RF12_HDR_MASK)
-#define slack           6
-#define crc_initVal     0x1D0F
-#define crc_endVal      0x1D0F
-#define crc_update      _crc_xmodem_update
-#else
-#define rf12_rawlen     rf12_len
-// #define rf12_dest    (rf12_hdr & RF12_HDR_DST ? rf12_hdr & RF12_HDR_MASK : 0)
-// #define rf12_orig    (rf12_hdr & RF12_HDR_DST ? 0 : rf12_hdr & RF12_HDR_MASK)
-#define slack           5
-#define crc_initVal     ~0
-#define crc_endVal      0
-#define crc_update      _crc16_update
+#include "RF12.h"
+
+
+#if JEELIB_SPI1  //Defined in RF12.h. Set to true if using SPI1. Set false if SPI or SPI0 (default). 
+	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB)
+		#include<SPI.h>
+
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW, do nothing. To prevent compiler errors 
+									//SPIClass declaration in file RF69_avr1.h
+			static uint8_t cs_pin = SS1;     // chip select pin						
+		#else	
+			static uint8_t cs_pin = 31;     // 31 = PB12 = chip select pin				
+			SPIClass SPI_2 (2);
+		#endif
+	#elif defined(STM32F103xB)	//Maple Mini
+		#include<SPI.h>
+  		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW,  do nothing. To prevent compiler errors 
+  									//SPIClass declaration in file RF69_avr1.h
+			static uint8_t cs_pin = SS1;     // chip select pin	  									
+		#else	
+  		//#include <EEPROM.h> 
+			SPIClass SPI_M2(28, 29, 30 ); //mosi, miso, sclk ;	//SPIClass declaration for Maple Mini
+			static uint8_t cs_pin = 31;     // 31 = PB12 = chip select pin	
+		#endif
+	#elif defined  (ESP32) 
+		#include<SPI.h>
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else 						
+			SPIClass * hspi = NULL;		
+		#endif
+		static uint8_t cs_pin = 15;		// set your SPI1 chip select pin	
+	#else
+		#include<SPI1.h>
+		static uint8_t cs_pin = SS1;     // SPI1 chip select pin
+	#endif
+	
+#else	//SPI
+	#include<SPI.h>
+	#if defined(HALLARD)
+	static uint8_t cs_pin = 16; // set your SPI1 chip select pin for Hallards module
+	#else
+	static uint8_t cs_pin = SS;     // SPI chip select pin
+	#endif
 #endif
 
-// #define OPTIMIZE_SPI 1  // uncomment this to write to the RFM12B @ 8 Mhz
+#if defined (__LGT8FX8P__)
+  #include <util/crc16.h>
+  //#include <avr/eeprom.h>
+  #include <avr/pgmspace.h>
+  #include <util/parity.h>
+  #include <avr/sleep.h>
+  #include <EEPROM.h>
+  #define RFM_IRQ 2 // Arduino interrupt pin number used by radio (RFM12b/RFM69CW)
+#elif defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_MEGAAVR)
+  #include <avr/io.h>
+  #include <util/crc16.h>
+  #include <avr/eeprom.h>
+  #include <avr/sleep.h>
+  #define RFM_IRQ 2 // Arduino interrupt pin number used by radio (RFM12b/RFM69CW)
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32) 
+  #if defined  (ESP32)
+  	#if JEELIB_SPI1  	
+  		#define RFM_IRQ 35 
+  	#else
+  		#define RFM_IRQ 34 
+  	#endif
+  	//#define RECEIVE_ATTR IRAM_ATTR
+  	  	extern "C" {//  uint16_t _crc16_update(uint16_t crc, uint8_t a);
+  				 uint16_t IRAM_ATTR _crc_xmodem_update (uint16_t crc, uint8_t data);}
+  	//static void IRAM_ATTR rf12_interrupt()
+  #else	//ESP8266 boards
+   	#if defined(HALLARD)
+   	#define RFM_IRQ 15   // works for  Halards RFM12B/69CW module
+   	#else
+   	#define RFM_IRQ 4 // works for my esp8266
+   	#endif
+	static void ICACHE_RAM_ATTR rf12_interrupt (); // 
+	extern "C" {//  uint16_t _crc16_update(uint16_t crc, uint8_t a);
+  				 uint16_t ICACHE_RAM_ATTR _crc_xmodem_update (uint16_t crc, uint8_t data);}
+#endif
+
+#include <EEPROM.h>   	  	
+#include "crc16.h"
+
+// same code as in util/crc16.h
+//uint16_t _crc16_update(uint16_t crc, uint8_t a)
+//{
+//	  int i;
+//	  crc ^= a;
+//	  for (i = 0; i < 8; ++i)  {
+//	    if (crc & 1)
+//	      crc = (crc >> 1) ^ 0xA001;
+//	    else
+//	      crc = (crc >> 1);
+//	  }
+//	  return crc;
+//}
+#elif defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+  	#if JEELIB_SPI1  //true if using At328PB and SPI1. False if SPI or SPI0. 
+		#define RFM_IRQ PA8 // SPI1 interrupt
+	#else
+  		#define RFM_IRQ PB0 // SPI interrupt
+  	#endif
+  	extern "C" {uint16_t _crc_xmodem_update (uint16_t crc, uint8_t data);}
+	#include <EEPROM.h> 
+	#include "crc16.h"
+	/*
+	#define BOARD_NR_SPI              2 two api awailable
+	#define BOARD_SPI1_NSS_PIN        PA4
+	#define BOARD_SPI1_MOSI_PIN       PA7
+	#define BOARD_SPI1_MISO_PIN       PA6
+	#define BOARD_SPI1_SCK_PIN        PA5
+
+	#define BOARD_SPI2_NSS_PIN        PB12
+	#define BOARD_SPI2_MOSI_PIN       PB15
+	#define BOARD_SPI2_MISO_PIN       PB14
+	#define BOARD_SPI2_SCK_PIN        PB13
+	*/
+
+#else
+  #include <avr/io.h>
+  #include <util/crc16.h>
+  #include <avr/eeprom.h>
+  #include <avr/sleep.h>
+  #define RFM_IRQ 2 // Arduino interrupt pin number used by radio (RFM12b/RFM69CW)
+#endif
+
+
+#if RF12_COMPAT
+	#define rf12_rawlen     rf12_buf[1]
+	#define rf12_dest       (rf12_buf[2] & RF12_HDR_MASK)
+	#define rf12_orig       (rf12_buf[3] & RF12_HDR_MASK)
+	#define slack           6
+	#define crc_initVal     0x1D0F
+	#define crc_endVal      0x1D0F
+	#define crc_update      _crc_xmodem_update
+#else
+	#define rf12_rawlen     rf12_len
+	// #define rf12_dest    (rf12_hdr & RF12_HDR_DST ? rf12_hdr & RF12_HDR_MASK : 0)
+	// #define rf12_orig    (rf12_hdr & RF12_HDR_DST ? 0 : rf12_hdr & RF12_HDR_MASK)
+	#define slack           5
+	#define crc_initVal     ~0
+	#define crc_endVal      0
+	#define crc_update      _crc16_update
+#endif
+
+
+//#define OPTIMIZE_SPI 1  // uncomment this to write to the RFM12B @ 8 Mhz
 
 // pin change interrupts are currently only supported on ATmega328's
 // #define PINCHG_IRQ 1    // uncomment this to use pin-change interrupts
@@ -50,69 +175,111 @@
 //  - please leave SPI_SS, SPI_MOSI, SPI_MISO, and SPI_SCK as is, i.e. pointing
 //    to the hardware-supported SPI pins on the ATmega, *including* SPI_SS !
 
-#if defined(__AVR_ATmega2560__) || defined(__AVR_ATmega1280__)
+//#if defined(__AVR_ATmega2560__) || defined(__AVR_ATmega1280__)
+//
+//#define RFM_IRQ     2
+//#define SS_DDR      DDRB
+//#define SS_PORT     PORTB
+//#define SS_BIT      0
+//
+//#define SPI_SS      53    // PB0, pin 19
+//#define SPI_MOSI    51    // PB2, pin 21
+//#define SPI_MISO    50    // PB3, pin 22
+//#define SPI_SCK     52    // PB1, pin 20
+//
+//#elif defined(__AVR_ATmega644P__)
+//
+//#define RFM_IRQ     10
+//#define SS_DDR      DDRB
+//#define SS_PORT     PORTB
+//#define SS_BIT      4
+//
+//#define SPI_SS      4
+//#define SPI_MOSI    5
+//#define SPI_MISO    6
+//#define SPI_SCK     7
+//
+//#elif defined(__AVR_ATtiny84__) || defined(__AVR_ATtiny44__)
+//
+//#define RFM_IRQ     2
+//#define SS_DDR      DDRB
+//#define SS_PORT     PORTB
+//#define SS_BIT      1
+//
+//#define SPI_SS      1     // PB1, pin 3
+//#define SPI_MISO    4     // PA6, pin 7
+//#define SPI_MOSI    5     // PA5, pin 8
+//#define SPI_SCK     6     // PA4, pin 9
+//
+//#elif defined(__AVR_ATmega32U4__) //Arduino Leonardo
+//
+//#define RFM_IRQ     0       // PD0, INT0, Digital3
+//#define SS_DDR      DDRB
+//#define SS_PORT     PORTB
+//#define SS_BIT      6       // Dig10, PB6
+//
+//#define SPI_SS      17    // PB0, pin 8, Digital17
+//#define SPI_MISO    14    // PB3, pin 11, Digital14
+//#define SPI_MOSI    16    // PB2, pin 10, Digital16
+//#define SPI_SCK     15    // PB1, pin 9, Digital15
+//
+//#elif defined(__AVR_ATmega328PB__) //Atmega328PB 
+//	// Atmega328PB support trough MiniCore, https://github.com/MCUdude/MiniCore/
+//#define RFM_IRQ     2     // 2=JeeNode
+//#if JEELIB_SPI1
+//// SPI1 pin settings 
+//	#define SS_DDR      DDRE   //Port E Data Direction Register of SPI_MISO and SPI_SCK
+//	#define SS_PORT     PORTE
+//	#define SS_BIT      2     // 
+// 	//mixture of normal Arduino numbers and MiniCore numbers. Other number conventions not used
+//	#define SPI_SS      25    // PE2, pin 19 SS1   MiniCore numbers used (A6=D25)
+//	#define SPI_MOSI    26    // PE3, pin 22 MOSI1 MiniCore numbers used (A7=D26)
+//	#define SPI_MISO    14    // PC0, pin 23 MISO1 Arduino numbers used  (A0=D14)
+//	#define SPI_SCK     15    // PC1, pin 24 SCK1  Arduino numbers used	 (A1=D15)
 
-#define RFM_IRQ     2
-#define SS_DDR      DDRB
-#define SS_PORT     PORTB
-#define SS_BIT      0
-
-#define SPI_SS      53    // PB0, pin 19
-#define SPI_MOSI    51    // PB2, pin 21
-#define SPI_MISO    50    // PB3, pin 22
-#define SPI_SCK     52    // PB1, pin 20
-
-#elif defined(__AVR_ATmega644P__)
-
-#define RFM_IRQ     10
-#define SS_DDR      DDRB
-#define SS_PORT     PORTB
-#define SS_BIT      4
-
-#define SPI_SS      4
-#define SPI_MOSI    5
-#define SPI_MISO    6
-#define SPI_SCK     7
-
-#elif defined(__AVR_ATtiny84__) || defined(__AVR_ATtiny44__)
-
-#define RFM_IRQ     2
-#define SS_DDR      DDRB
-#define SS_PORT     PORTB
-#define SS_BIT      1
-
-#define SPI_SS      1     // PB1, pin 3
-#define SPI_MISO    4     // PA6, pin 7
-#define SPI_MOSI    5     // PA5, pin 8
-#define SPI_SCK     6     // PA4, pin 9
-
-#elif defined(__AVR_ATmega32U4__) //Arduino Leonardo
-
-#define RFM_IRQ     0       // PD0, INT0, Digital3
-#define SS_DDR      DDRB
-#define SS_PORT     PORTB
-#define SS_BIT      6       // Dig10, PB6
-
-#define SPI_SS      10    // PB6, pin 30, Digital10
-#define SPI_MISO    14    // PB3, pin 11, Digital14
-#define SPI_MOSI    16    // PB2, pin 10, Digital16
-#define SPI_SCK     15    // PB1, pin 9, Digital15
-
-#else
-
-// ATmega168, ATmega328, etc.
-#define RFM_IRQ     2     // 2=JeeNode, 18=JeeNode pin change
-//#define RFM_IRQ       1     // PCINT1=JeeNode Block pin change
-#define SS_DDR      DDRB
-#define SS_PORT     PORTB
-#define SS_BIT      2     // for PORTB: 2 = d.10, 1 = d.9, 0 = d.8
-
-#define SPI_SS      10    // PB2, pin 16
-#define SPI_MOSI    11    // PB3, pin 17
-#define SPI_MISO    12    // PB4, pin 18
-#define SPI_SCK     13    // PB5, pin 19
-
-#endif
+//	//#ifndef SPCR // not useful with SPI1 as is with SPI0
+//	// #define SPCR SPCR1
+//	// #define SPSR SPSR1
+//	// #define SPDR SPDR1
+//	//#endif
+//#else
+//	// SPI0 pin settings
+//// You can use either SPI0 or SPI1, not both in the same time
+//// Using both in the same time needs more to hack
+//	#define SS_DDR      DDRB
+//	#define SS_PORT     PORTB
+//	#define SS_BIT      2     // for PORTB: 2 = d.10, 1 = d.9, 0 = d.8
+//	//normal Arduino numbers
+//	#define SPI_SS      10    // PB2, pin 14 32 TQFP package
+//	#define SPI_MOSI    11    // PB3, pin 15 32 TQFP package
+//	#define SPI_MISO    12    // PB4, pin 16 32 TQFP package
+//	#define SPI_SCK     13    // PB5, pin 17 32 TQFP package
+//
+//   //MiniCore at C:\Users\******\AppData\Local\Arduino15\packages\MiniCore\hardware\avr\2.0.3\variants\pb-variant\pins_arduino.h 
+//   // Other atmega328PB arduino libraries/packages may have other solutions - other pin numbers anyway
+//	#ifndef SPCR
+//	 #define SPCR SPCR0
+//	 #define SPSR SPSR0
+//	 #define SPDR SPDR0
+//	#endif
+//#endif
+//
+//
+//#else
+//
+//// ATmega168, ATmega328, etc.
+//#define RFM_IRQ     2     // 2=JeeNode, 18=JeeNode pin change
+////#define RFM_IRQ       1     // PCINT1=JeeNode Block pin change
+//#define SS_DDR      DDRB
+//#define SS_PORT     PORTB
+//#define SS_BIT      2     // for PORTB: 2 = d.10, 1 = d.9, 0 = d.8
+//
+//#define SPI_SS      10    // PB2, pin 16 28 PDIP package
+//#define SPI_MOSI    11    // PB3, pin 17 28 PDIP package
+//#define SPI_MISO    12    // PB4, pin 18 28 PDIP package
+//#define SPI_SCK     13    // PB5, pin 19 28 PDIP package
+//
+//#endif
 
 // RF12 command codes
 #define RF_RECV_CONTROL 0x94A0
@@ -137,10 +304,13 @@
 enum {
     TXCRC1, TXCRC2, TXTAIL, TXDONE, TXIDLE,
     TXRECV,
-    TXPRE1, TXPRE2, TXPRE3, TXSYN1, TXSYN2,
+    TXPRE1, TXPRE2, TXPRE3, //TXPRE4, TXPRE5, TXPRE6, TXPRE7, TXPRE8, 
+    TXSYN1, TXSYN2,
 };
 
-static uint8_t cs_pin = SS_BIT;     // chip select pin
+//static uint8_t cs_pin = SS_BIT;     // chip select pin
+
+
 
 static uint8_t nodeid;              // address of this node
 static uint8_t group;               // network group
@@ -181,92 +351,422 @@ void rf12_set_cs (uint8_t pin) {
 #if defined(__AVR_ATmega32U4__) //Arduino Leonardo
   cs_pin = pin - 4;             // Dig10 (PB6), Dig9 (PB5), or Dig8 (PB4)
 #elif defined(__AVR_ATmega168__) || defined(__AVR_ATmega328__) || defined (__AVR_ATmega328P__) // ATmega168, ATmega328
+//|| defined (__AVR_ATmega328PB__)  //ATmega328PB 051119
   cs_pin = pin - 8;             // Dig10 (PB2), Dig9 (PB1), or Dig8 (PB0)
 #endif
 }
 
+//RFM12b reliable SPI read speed is 2 MHz, write speed is higher 4-8 Mhz
+#if JEELIB_SPI1  //true if using At328PB and SPI1. False if SPI or SPI0. 
+	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+		SPISettings settingsRead(2000000L, MSBFIRST, SPI_MODE0); //SPI setings for reading
+		SPISettings settingsWrite(F_CPU, MSBFIRST, SPI_MODE0); //SPI setings for writing
+	#elif defined  (ESP32)
+		SPISettings settingsRead(2000000L, MSBFIRST, SPI_MODE0); //SPI setings for reading
+		SPISettings settingsWrite(F_CPU, MSBFIRST, SPI_MODE0); //SPI setings for writing
+	#else
+		SPI1Settings settingsRead(2000000L, MSBFIRST, SPI_MODE0); //SPI setings for reading
+		SPI1Settings settingsWrite(F_CPU, MSBFIRST, SPI_MODE0); //SPI setings for writing
+	#endif
+#else
+	SPISettings settingsRead(2000000L, MSBFIRST, SPI_MODE0); //SPI setings for reading
+	SPISettings settingsWrite(F_CPU, MSBFIRST, SPI_MODE0); //SPI setings for writing
+#endif
+
 /// @details
 /// Initialise the SPI port for use by the RF12 driver.
-void rf12_spiInit () {
-    bitSet(SS_PORT, cs_pin);
-    bitSet(SS_DDR, cs_pin);
-    digitalWrite(SPI_SS, 1);
-    pinMode(SPI_SS, OUTPUT);
-    pinMode(SPI_MOSI, OUTPUT);
-    pinMode(SPI_MISO, INPUT);
-    pinMode(SPI_SCK, OUTPUT);
-#ifdef SPCR
-    SPCR = _BV(SPE) | _BV(MSTR);
-	#if F_CPU > 10000000
-    // use clk/2 (2x 1/4th) for sending (and clk/8 for recv, see rf12_xferSlow)
-    SPSR |= _BV(SPI2X);
+	void rf12_spiInit () {
+	digitalWrite(cs_pin,HIGH);
+    pinMode(cs_pin,OUTPUT);
+    //pinMode(MISO,INPUT_PULLUP);
+    //pinMode(RFM_IRQ,INPUT); //Moved to end of rf12_initialize()
+    #if JEELIB_SPI1 //if using At328PB or STM32F103X and SPI1. 
+    	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+    		#if defined(STM32F103xB) //Maple Mini	
+    		    #if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+				#else
+    			pinMode(PIN_SPI_MISO,INPUT_PULLUP);
+    			//SPI_M2.begin(28, 29, 30 ); //mosi, miso, sclk
+    			SPI_M2.begin();
+    			#endif
+    		#else
+    			pinMode(BOARD_SPI2_MISO_PIN,INPUT_PULLUP);
+    			#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+				#else
+    				SPI_2.begin(); //mosi, miso, sclk, ssel
+    			#endif
+    		#endif
+    	#elif defined  (ESP32)
+    		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+    		#else
+    	 	hspi = new SPIClass(HSPI);
+    		pinMode(12,INPUT_PULLUP);
+    		hspi->begin();  //hspi default values; SCLK = 14, MISO = 12, MOSI = 13, SS = 15
+    	//	Serial.println("spi_bus ");//Serial.println(hspi->spi_bus);//debug, not allowing to access variable "spi_bus"
+    		#endif
+    	#else
+    		pinMode(MISO1,INPUT_PULLUP);
+    		SPI1.begin();
+    	#endif	
+    #else
+		pinMode(MISO,INPUT_PULLUP);
+		SPI.begin();
+		Serial.println("SPI.begin(); ");//Serial.println(hspi->spi_bus);
 	#endif
-#else
-    // ATtiny
-    USICR = bit(USIWM0);
-#endif
-    pinMode(RFM_IRQ, INPUT);
-    digitalWrite(RFM_IRQ, 1); // pull-up
+ #if defined (ESP8266) || defined  (ESP8266_GENERIC)
+ 	EEPROM.begin(512);
+ #elif defined  (ESP32)
+    if(!EEPROM.begin(512)){Serial.println(F("\r\n EEPROM.begin() failed"));}
+  #elif defined(MCU_STM32F103C8)  || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) 
+//   	SPI.setBitOrder(MSBFIRST); // Set the SPI_1 bit order
+// 	SPI.setClockDivider(SPI_CLOCK_DIV64);      // Slow speed (72 / 32 = 2.25 MHz SPI_1 speed)
+    //uint16 Status = EEPROM.init(0x801F000, 0x801F200, 0x200); 
+    byte Status = EEPROM.init(0x801F000, 0x801F200, 0x200); 
+ #elif defined(STM32F103xB)
+ 	EEPROM.begin();
+// #elif defined (__LGT8FX8P__)
+// 	EEPROM.begin();
+ #endif
 }
+//void rf12_spiInit () {	
+//	//Serial.print("\r\nPIN_SPI_SCK1 ");Serial.println(PIN_SPI_SCK1);Serial.flush();//debug
+//    bitSet(SS_PORT, cs_pin);
+//    bitSet(SS_DDR, cs_pin);
+//    digitalWrite(SPI_SS, 1);
+//    pinMode(SPI_SS, OUTPUT);
+//    pinMode(SPI_MOSI, OUTPUT);
+//    pinMode(SPI_MISO, INPUT);
+//    pinMode(SPI_SCK, OUTPUT);
+//#ifdef SPCR
+//	#if defined(__AVR_ATmega328PB__) & (JEELIB_SPI1) //Atmega328PB
+//	//	#if JEELIB_SPI1
+//		//SPI1
+//		  //  Serial.print("\r\nSPCR1 = _BV(SPE) | _BV(MSTR); ");Serial.flush();
+//    		SPCR1 = _BV(SPE) | _BV(MSTR); // if Atmega328PB & SPI1, must use SPCR1
+//			#if F_CPU > 10000000
+//    		// use clk/2 (2x 1/4th) for sending (and clk/8 for recv, see rf12_xferSlow)
+//    			SPSR1 |= _BV(SPI2X);		  // if Atmega328PB & SPI1, must use SPSR
+//			#endif		//end Atmega328PB 051119
+//	//	#else //SPI0
+//	//	    //Serial.print("\r\nSPCR0 = _BV(SPE) | _BV(MSTR); ");Serial.flush();
+//	//	    SPCR0 = _BV(SPE) | _BV(MSTR);    
+//	//		#if F_CPU > 10000000
+//	//	    	// use clk/2 (2x 1/4th) for sending (and clk/8 for recv, see rf12_xferSlow)
+//	//	    	SPSR0 |= _BV(SPI2X);
+//	// 		#endif 
+//	//	 #endif	
+//	#else
+//		//Serial.print("\r\nSPCR = _BV(SPE) | _BV(MSTR); ");Serial.flush();
+//	    SPCR = _BV(SPE) | _BV(MSTR); 
+//		#if F_CPU > 10000000
+//    		// use clk/2 (2x 1/4th) for sending (and clk/8 for recv, see rf12_xferSlow)
+//    		SPSR |= _BV(SPI2X);		  
+//		#endif
+//	#endif		
+//#else
+//    // ATtiny
+//    USICR = bit(USIWM0);
+//#endif
+//    pinMode(RFM_IRQ, INPUT_PULLUP);
+//    //digitalWrite(RFM_IRQ, 1); // pull-up
+    //Serial.print("PIN_A6 ");Serial.println(PIN_A6);
+    //Serial.print("\r\nRFM_IRQ ");Serial.println(digitalRead(RFM_IRQ));
+    //Serial.print("Digital 2 ");Serial.println(digitalRead(2));
+    //Serial.flush();//debug
+    //#define PIN_A6 (6)
+   // do{;}while(true);
+//}
 
-static uint8_t rf12_byte (uint8_t out) {
-#ifdef SPDR
-    SPDR = out;
-    // this loop spins 4 usec with a 2 MHz SPI clock
-    while (!(SPSR & _BV(SPIF)))
-        ;
-    return SPDR;
-#else
-    // ATtiny
-    USIDR = out;
-    byte v1 = bit(USIWM0) | bit(USITC);
-    byte v2 = bit(USIWM0) | bit(USITC) | bit(USICLK);
-#if F_CPU <= 5000000
-    // only unroll if resulting clock stays under 2.5 MHz
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-    USICR = v1; USICR = v2;
-#else
-    for (uint8_t i = 0; i < 8; ++i) {
-        USICR = v1;
-        USICR = v2;
-    }
-#endif
-    return USIDR;
-#endif
-}
+//static uint8_t rf12_byte (uint8_t out) {
+//#ifdef SPDR
+//	#if defined(__AVR_ATmega328PB__) & (JEELIB_SPI1) //Atmega328PB 051119
+//	//	#if JEELIB_SPI1 
+//    		SPDR1 = out;					// if Atmega328PB & SPI1, must use SPCR1
+//    		// this loop spins 4 usec with a 2 MHz SPI clock
+//    		while (!(SPSR1 & _BV(SPIF)))	// if Atmega328PB & SPI1, must use SPCR1
+//        	;
+//    		return SPDR1;					// if Atmega328PB & SPI1, must use SPCR1
+//	//	#else 
+//	//	//SPI0 
+//    //		SPDR0 = out;					// if Atmega328PB & SPI0, must use SPCR0
+//    //		// this loop spins 4 usec with a 2 MHz SPI clock
+//    //		while (!(SPSR0 & _BV(SPIF)))	// if Atmega328PB & SPI0, must use SPCR0
+//    //    	;
+//    //		return SPDR0;					// if Atmega328PB & SPI0, must use SPCR0
+//    //	#endif
+//	#else  
+//	SPDR = out;	
+//    // this loop spins 4 usec with a 2 MHz SPI clock
+//    while (!(SPSR & _BV(SPIF)))	
+//        ;
+//    return SPDR;
+//    #endif
+//#else
+//    // ATtiny
+//    USIDR = out;
+//    byte v1 = bit(USIWM0) | bit(USITC);
+//    byte v2 = bit(USIWM0) | bit(USITC) | bit(USICLK);
+//#if F_CPU <= 5000000
+//    // only unroll if resulting clock stays under 2.5 MHz
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//    USICR = v1; USICR = v2;
+//#else
+//    for (uint8_t i = 0; i < 8; ++i) {
+//        USICR = v1;
+//        USICR = v2;
+//    }
+//#endif
+//    return USIDR;
+//#endif
+//}
 
-static uint16_t rf12_xferSlow (uint16_t cmd) {
-    // slow down to under 2.5 MHz
-#ifdef SPCR
-	#if F_CPU > 10000000
-    bitSet(SPCR, SPR0);
+//static uint16_t rf12_xferSlow (uint16_t cmd) {
+//    // slow down to under 2.5 MHz
+//#if defined(__AVR_ATmega328PB__)  &  JEELIB_SPI1 //Atmega328PB
+////	#if JEELIB_SPI1 
+//	//SPI1
+//		#if F_CPU > 10000000
+//    		bitSet(SPCR1, SPR0);		// if Atmega328PB & SPI1, must use SPCR1
+//		#endif
+//	    	bitClear(SS_PORT, cs_pin);
+//    		uint16_t reply = rf12_byte(cmd >> 8) << 8;
+//    		reply |= rf12_byte(cmd);
+//    		bitSet(SS_PORT, cs_pin);
+//		#if F_CPU > 10000000
+//    		bitClear(SPCR1, SPR0);		// if Atmega328PB & SPI1, must use SPCR1
+//		#endif
+//    	 return reply;	
+// //   #else 	
+//	//SPI0 
+////		#if F_CPU > 10000000
+////    		bitSet(SPCR0, SPR0);		// if Atmega328PB & SPI0, must use SPCR0
+////		#endif
+////    		bitClear(SS_PORT, cs_pin);
+////    		uint16_t reply = rf12_byte(cmd >> 8) << 8;
+////    		reply |= rf12_byte(cmd);
+////	    	bitSet(SS_PORT, cs_pin);
+////		#if F_CPU > 10000000
+////    		bitClear(SPCR0, SPR0);		// if Atmega328PB & SPI0, must use SPCR0
+////		#endif
+////    	 return reply;
+////  #endif	 
+//#else		/Other (avr)microcontrollers
+//	#if F_CPU > 10000000
+//    	bitSet(SPCR, SPR0);
+//	#endif
+//    	bitClear(SS_PORT, cs_pin);
+//    	uint16_t reply = rf12_byte(cmd >> 8) << 8;
+//    	reply |= rf12_byte(cmd);
+//    	bitSet(SS_PORT, cs_pin);
+//	#if F_CPU > 10000000
+//	    bitClear(SPCR, SPR0);
+//	#endif
+//    	 return reply;
+//#endif
+//     
+//}
+
+//#if OPTIMIZE_SPI
+//static void rf12_xfer (uint16_t cmd) {
+//    // writing can take place at full speed, even 8 MHz works
+//    bitClear(SS_PORT, cs_pin);//
+//    rf12_byte(cmd >> 8) << 8;
+//    rf12_byte(cmd);
+//    bitSet(SS_PORT, cs_pin);
+//}
+//#else
+//#define rf12_xfer rf12_xferSlow
+//#endif
+
+#if defined (ESP32)
+unsigned int IRAM_ATTR rf12_xferSlow(unsigned int cmd) 
+#else
+unsigned int rf12_xferSlow(unsigned int cmd)
+#endif	
+{
+  unsigned int result;   // result to return
+  #if JEELIB_SPI1  //if using At328PB and SPI1. 
+  	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB)
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+		  	SPI_2.beginTransaction(settingsRead);
+		#endif 
+	#elif defined(STM32F103xB)	//Maple Mini
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+		  	SPI_M2.beginTransaction(settingsRead);
+		#endif 			 		
+  	#elif defined  (ESP32)	
+  		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+  									//do nothing. Routine for RFM69CW is in RF69_avr1.h
+  		#else							
+  	  		//initialise hspi with default pins SCLK = 14, MISO = 12, MOSI = 13, SS = 15 		 	
+ 		 	hspi->beginTransaction(settingsRead);;
+ 		 #endif
+  	#else
+  		SPI1.beginTransaction(settingsRead);
+  	#endif
+  #else
+  	SPI.beginTransaction(settingsRead);
+  #endif
+  // take the chip select low to select the device:
+  digitalWrite(cs_pin, LOW);
+  #if  JEELIB_SPI1  //if using At328PB and SPI1. 
+  	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) 
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else  		
+  			result=SPI_2.transfer16(cmd);  //Send value to record into register
+  		#endif
+	#elif defined(STM32F103xB)	//Maple Mini
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else 
+			result=SPI_M2.transfer16(cmd);  //Send value to record into register
+  		#endif 		
+  	#elif defined  (ESP32)
+  		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+  									//do nothing. Routine for RFM69CW is in RF69_avr1.h
+		#else  									
+  			result=hspi->transfer16(cmd);  //Send value to record into register
+  		#endif
+  	#else
+		result=SPI1.transfer16(cmd);  //Send value to record into register
 	#endif
-#endif
-    bitClear(SS_PORT, cs_pin);
-    uint16_t reply = rf12_byte(cmd >> 8) << 8;
-    reply |= rf12_byte(cmd);
-    bitSet(SS_PORT, cs_pin);
-#ifdef SPCR
-	#if F_CPU > 10000000
-    bitClear(SPCR, SPR0);
-	#endif
-#endif
-    return reply;
+  #else
+  	result=SPI.transfer16(cmd);  //Send value to record into register
+  #endif	
+  // take the chip select high to de-select:
+  digitalWrite(cs_pin, HIGH);
+  #if JEELIB_SPI1  //if using At328PB and SPI1. 
+	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB)
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+  			SPI_2.endTransaction();
+  		#endif	
+	#elif defined(STM32F103xB)	//Maple Mini
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else 
+  			SPI_M2.endTransaction();
+  		#endif	
+  	#elif defined  (ESP32)	
+  		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+  									//do nothing. Routine for RFM69CW is in RF69_avr1.h
+  		#else
+  			hspi->endTransaction();
+  		#endif
+  	#else  
+  		SPI1.endTransaction();
+  	#endif	
+  #else 
+  	SPI.endTransaction();
+  #endif
+  return result;
 }
 
 #if OPTIMIZE_SPI
-static void rf12_xfer (uint16_t cmd) {
-    // writing can take place at full speed, even 8 MHz works
-    bitClear(SS_PORT, cs_pin);
-    rf12_byte(cmd >> 8) << 8;
-    rf12_byte(cmd);
-    bitSet(SS_PORT, cs_pin);
+	#if defined (ESP32)
+		unsigned int IRAM_ATTR rf12_xfer(unsigned int cmd) 
+	#else
+		unsigned int rf12_xfer(unsigned int cmd) 
+	#endif
+{
+  unsigned int result;   // result to return
+  #if JEELIB_SPI1  //if using At328PB and SPI1. 
+  	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) 
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+  			SPI_2.beginTransaction(settingsWrite);
+  		#endif
+	#elif defined(STM32F103xB)	//Maple Mini
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+			SPI_M2.beginTransaction(settingsWrite);
+  		#endif   		
+  	#elif defined  (ESP32)
+  	  	#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+  									//do nothing. Routine for RFM69CW is in RF69_avr1.h	
+  		#else
+  			hspi->beginTransaction(settingsWrite);
+  		#endif
+  	#else
+  		SPI1.beginTransaction(settingsWrite);
+  	#endif
+  #else
+  	SPI.beginTransaction(settingsWrite);
+  #endif
+  //SPI.beginTransaction(settingsWrite);
+  // take the chip select low to select the device:
+  digitalWrite(cs_pin, LOW);
+  #if JEELIB_SPI1  //if using At328PB and SPI1. 
+  	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) 
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+  			result=SPI_2.transfer16(cmd);  //Send value to record into register
+  		#endif
+	#elif defined(STM32F103xB)	//Maple Mini
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+			SPI_M2.transfer16(cmd);  //Send value to record into register
+  		#endif  		
+  	#elif defined  (ESP32)
+  	  	#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+  									//do nothing. Routine for RFM69CW is in RF69_avr1.h
+  		#else
+  			result=hspi->transfer16(cmd);  //Send value to record into register
+  		#endif
+  	#else
+		result=SPI1.transfer16(cmd);  //Send value to record into register
+	#endif  
+  #else
+  	result=SPI.transfer16(cmd);  //Send value to record into register
+  #endif
+//result=SPI.transfer16(cmd);  //Send value to record into register
+  // take the chip select high to de-select:
+  digitalWrite(cs_pin, HIGH);
+  #if JEELIB_SPI1  //if using At328PB and SPI1. 
+	#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) 
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+  			SPI_2.endTransaction();
+  		#endif
+	#elif defined(STM32F103xB)	//Maple Mini
+		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+									// do nothing. To prevent compiler errors 
+		#else
+			SPI_M2.endTransaction();
+  		#endif  		
+  	#elif defined  (ESP32)
+  		#if  defined(RF69_COMPAT) 	//if using radio RFM69CW
+  									//do nothing. Routine for RFM69CW is in RF69_avr1.h
+		#else  									  		
+  			hspi->endTransaction();
+  		#endif
+  	#else  
+  		SPI1.endTransaction();
+  	#endif
+  #else
+  	SPI.endTransaction();		
+  #endif
+  
+  return result;
 }
 #else
 #define rf12_xfer rf12_xferSlow
@@ -278,46 +778,67 @@ static void rf12_xfer (uint16_t cmd) {
 /// from functioning, this can be used to adjust frequencies, power levels,
 /// RSSI threshold, etc. See the RFM12B wireless module documentation.
 ///
-/// This call will briefly disable interrupts to avoid clashes on the SPI bus.
+/// This call will briefly disable  s to avoid clashes on the SPI bus.
 ///
 /// Returns the 16-bit value returned by SPI. Probably only useful with a
 /// "0x0000" status poll command.
 /// @param cmd RF12 command, topmost bits determines which register is affected.
-uint16_t rf12_control(uint16_t cmd) {
-#ifdef EIMSK
-#if PINCHG_IRQ
-    #if RFM_IRQ < 8
-        bitClear(PCICR, PCIE0);
-    #elif RFM_IRQ < 16
-        bitClear(PCICR, PCIE1);
-    #else
-        bitClear(PCICR, PCIE2);
-    #endif
-#else
-    bitClear(EIMSK, INT0);
-#endif
-   uint16_t r = rf12_xferSlow(cmd);
-#if PINCHG_IRQ
-    #if RFM_IRQ < 8
-        bitSet(PCICR, PCIE0);
-    #elif RFM_IRQ < 16
-        bitSet(PCICR, PCIE1);
-    #else
-        bitSet(PCICR, PCIE2);
-    #endif
-#else
-    bitSet(EIMSK, INT0);
-#endif
-#else
-    // ATtiny
-    bitClear(GIMSK, INT0);
-    uint16_t r = rf12_xferSlow(cmd);
-    bitSet(GIMSK, INT0);
-#endif
-    return r;
-}
+//uint16_t rf12_control(uint16_t cmd) {
+//#ifdef EIMSK
+//#if PINCHG_IRQ
+//    #if RFM_IRQ < 8
+//        bitClear(PCICR, PCIE0);
+//    #elif RFM_IRQ < 16
+//        bitClear(PCICR, PCIE1);
+//    #else
+//        bitClear(PCICR, PCIE2);
+//    #endif
+//#else
+//	#if defined(__AVR_ATmega2560__) || defined(__AVR_ATmega1280__)
+//	bitClear(EIMSK, INT4);
+//	#else
+//    bitClear(EIMSK, INT0);
+//    #endif
+//#endif
+//   uint16_t r = rf12_xferSlow(cmd);
+//#if PINCHG_IRQ
+//    #if RFM_IRQ < 8
+//        bitSet(PCICR, PCIE0);
+//    #elif RFM_IRQ < 16
+//        bitSet(PCICR, PCIE1);
+//    #else
+//        bitSet(PCICR, PCIE2);
+//    #endif
+//#else
+//	#if defined(__AVR_ATmega2560__) || defined(__AVR_ATmega1280__)
+//	bitSet(EIMSK, INT4);
+//	#else
+//    bitSet(EIMSK, INT0);
+//    #endif
+//#endif
+//#else
+//    // ATtiny
+//    bitClear(GIMSK, INT0);
+//    uint16_t r = rf12_xferSlow(cmd);
+//    bitSet(GIMSK, INT0);
+//#endif
+//    return r;
+//}
 
-static void rf12_interrupt () {
+#if defined (ESP32)
+	uint16_t IRAM_ATTR rf12_control(uint16_t cmd) 
+#else
+	uint16_t rf12_control(uint16_t cmd) 
+#endif
+{   uint16_t r = rf12_xferSlow(cmd);
+    return r;}
+
+#if defined (ESP32)
+	static void IRAM_ATTR rf12_interrupt()
+#else
+	static void rf12_interrupt () 
+#endif
+{
     // a transfer of 2x 16 bits @ 2 MHz over SPI takes 2x 8 us inside this ISR
     // correction: now takes 2 + 8 Âµs, since sending can be done at 8 MHz
     rf12_xfer(0x0000);
@@ -373,7 +894,7 @@ static void rf12_interrupt () {
     }
 }
 
-#if PINCHG_IRQ
+#if PINCHG_IRQ // pin change interrups may not work in this forked library
     #if RFM_IRQ < 8
         ISR(PCINT0_vect) {
             while (!bitRead(PINB, RFM_IRQ))
@@ -411,6 +932,7 @@ static void rf12_recvStart () {
 
 #include <RF12.h>
 #include <Ports.h> // needed to avoid a linker error :(
+// Ports may not working in this fork of JeeLib
 
 /// @details
 /// The timing of this function is relatively coarse, because SPI transfers are
@@ -575,10 +1097,14 @@ void rf12_sendNow (uint8_t hdr, const void* ptr, uint8_t len) {
 ///             lose a few interrupts. Value 3 can only be used if the ATmega
 ///             fuses have been set for fast startup, i.e. 258 CK - the default
 ///             Arduino fuse settings are not suitable for full power down.
-void rf12_sendWait (uint8_t mode) {
+void rf12_sendWait (uint8_t mode) { // sleep for AVR at the moment
     // wait for packet to actually finish sending
     // go into low power mode, as interrupts are going to come in very soon
-    while (rxstate != TXIDLE)
+    while (rxstate != TXIDLE){
+    #if defined(ESP8266) || defined(ESP8266_GENERIC)  || defined(ESP32) || defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+ 		//do nothing
+ 		yield();
+	#else 
         if (mode) {
             // power down mode is only possible if the fuses are set to start
             // up in 258 clock cycles, i.e. approx 4 us - else must use standby!
@@ -590,6 +1116,8 @@ void rf12_sendWait (uint8_t mode) {
                                        SLEEP_MODE_IDLE);
             sleep_mode();
         }
+#endif
+	}
 }
 
 /// @details
@@ -630,14 +1158,17 @@ uint8_t rf12_initialize (uint8_t id, uint8_t band, uint8_t g, uint16_t f) {
 // caller should validate!    if (frequency < 96) frequency = 1600;
 
     rf12_spiInit();
+    //    Serial.println("\r\n rf12_spiInit ");//do{;}while(true);
     rf12_xfer(0x0000); // initial SPI transfer added to avoid power-up problem
     rf12_xfer(RF_SLEEP_MODE); // DC (disable clk pin), enable lbd
-
     // wait until RFM12B is out of power-up reset, this takes several *seconds*
     rf12_xfer(RF_TXREG_WRITE); // in case we're still in OOK mode
-    while (digitalRead(RFM_IRQ) == 0)
-        rf12_xfer(0x0000);
-
+    //#if defined(HALLARD)
+    //while (digitalRead(RFM_IRQ) == 1) // Atmega328PB SPI1 hangs on this while 081119
+    //#else
+    while (digitalRead(RFM_IRQ) == 0) // Atmega328PB SPI1 hangs on this while 081119
+    //#endif
+    rf12_xfer(0x0000);
     rf12_xfer(0x80C7 | (band << 4)); // EL (ena TX), EF (ena RX FIFO), 12.0pF
     rf12_xfer(0xA000 + frequency); // 96-3960 freq range of values within band
     rf12_xfer(0xC606); // approx 49.2 Kbps, i.e. 10000/29/(1+6) Kbps
@@ -685,12 +1216,35 @@ uint8_t rf12_initialize (uint8_t id, uint8_t band, uint8_t g, uint16_t f) {
             bitClear(PCMSK2, RFM_IRQ - 16);
     #endif
 #else
+ #if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)
     if ((nodeid & NODE_ID) != 0)
-        attachInterrupt(0, rf12_interrupt, LOW);
+      {
+      	//#if defined(HALLARD) //&& !defined(ESP32)
+      	//attachInterrupt(digitalPinToInterrupt(RFM_IRQ), rf12_interrupt, RISING);//Hallards module + inverting transistor on IRQ
+      	//#else
+      	attachInterrupt(digitalPinToInterrupt(RFM_IRQ), rf12_interrupt, FALLING);//LOW did'nt work ESP8266
+      //Serial.println("\r\n attachInterrupt");
+      //	#endif
+      }
+      //do{;}while(true);
     else
-        detachInterrupt(0);
-#endif
-
+       {detachInterrupt(digitalPinToInterrupt(RFM_IRQ));}
+    // SPI.usingInterrupt(digitalPinToInterrupt(IRQ)); //ESP8266 does not support interrupt handling in SPI
+ #elif defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) //|| defined(STM32F103xB)
+    if ((nodeid & NODE_ID) != 0)
+      {attachInterrupt(digitalPinToInterrupt(RFM_IRQ), rf12_interrupt, (ExtIntTriggerMode) FALLING);}
+    else
+      {detachInterrupt(digitalPinToInterrupt(RFM_IRQ));}  
+ #else
+    if ((nodeid & NODE_ID) != 0)
+      {attachInterrupt(digitalPinToInterrupt(RFM_IRQ), rf12_interrupt, LOW);}
+    else
+      {detachInterrupt(digitalPinToInterrupt(RFM_IRQ));
+    //SPI.usingInterrupt(digitalPinToInterrupt(RFM_IRQ)); //pitänee siirtää attachInterrupt puolelle, jos tarvii ollenkaan
+    }  
+ #endif
+ #endif
+ 	pinMode(RFM_IRQ,INPUT);
     return nodeid;
 }
 
@@ -724,19 +1278,84 @@ void rf12_onOff (uint8_t value) {
 uint8_t rf12_configSilent () {
     uint16_t crc = ~0;
     for (uint8_t i = 0; i < RF12_EEPROM_SIZE; ++i) {
-        byte e = eeprom_read_byte(RF12_EEPROM_ADDR + i);
-        crc = crc_update(crc, e);
+#if defined (__LGT8FX8P__)
+		byte e = EEPROM.read((int)RF12_EEPROM_ADDR + i);
+#elif defined(ARDUINO_ARCH_AVR)|| defined(ARDUINO_ARCH_MEGAAVR)
+        byte e = eeprom_read_byte(RF12_EEPROM_ADDR + i);    	
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)    	
+ 		byte e = EEPROM.read((int)RF12_EEPROM_ADDR + i);
+#elif defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+ 		byte e = EEPROM.read(i); 		
+#else
+	//	Serial.println(F("\r\nESP rf12_configSilent no processor"));
+#endif        
+       // crc = crc_update(crc, e);
+       crc =  _crc16_update(crc, e);
     }
+    
+#if defined (__LGT8FX8P__)
+    if (crc || EEPROM.read((int)RF12_EEPROM_ADDR + 2) != RF12_EEPROM_VERSION)
+     {Serial.print(F("\r\nrf12_configSilent eeprom_read_byte failed "));
+        return 0;}     
+#elif defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_MEGAAVR)
     if (crc || eeprom_read_byte(RF12_EEPROM_ADDR + 2) != RF12_EEPROM_VERSION)
-        return 0;
-
+    {Serial.print(F("\r\nrf12_configSilent eeprom_read_byte failed "));
+        return 0;}
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)   
+    if (crc || EEPROM.read((int)RF12_EEPROM_ADDR + 2) != RF12_EEPROM_VERSION)
+     {
+ 	 Serial.println(F("\r\nESP rf12_configSilent EEPROM.read failed "));
+     Serial.print(F("RF12_EEPROM_SIZE "));Serial.println(RF12_EEPROM_SIZE);
+     Serial.print(F("EEPROM.read crc "));Serial.print(EEPROM.read((int)RF12_EEPROM_ADDR + 0x0F)*256 + EEPROM.read((int)RF12_EEPROM_ADDR + 0x0E));
+     //Serial.print("*256 +");Serial.println(EEPROM.read((int)RF12_EEPROM_ADDR + 14));
+     Serial.print(F(" calculated crc "));Serial.println(crc);
+     Serial.print(F("EEPROM.read((int)RF12_EEPROM_ADDR + 2) "));Serial.println(EEPROM.read((int)RF12_EEPROM_ADDR + 0x02));
+     Serial.print(F("RF12_EEPROM_VERSION "));Serial.println(RF12_EEPROM_VERSION);
+        return 0;}
+        
+#elif defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+    if (crc || EEPROM.read(2) != RF12_EEPROM_VERSION)
+             {Serial.println(F("\r\nSTM32 rf12_configSilent EEPROM.read failed "));
+     
+    // Serial.print("RF12_EEPROM_SIZE ");Serial.println(RF12_EEPROM_SIZE);
+     Serial.print(F("EEPROM.read crc "));Serial.print(EEPROM.read(0x0F)*256 + EEPROM.read(0x0E));
+     //Serial.print("*256 +");Serial.println(EEPROM.read((int)RF12_EEPROM_ADDR + 14));
+     Serial.print(F(", calculated crc "));Serial.println(crc);
+     Serial.print(F("EEPROM.read(2) "));Serial.print(EEPROM.read(0x02));
+     Serial.print(F(", RF12_EEPROM_VERSION "));Serial.println(RF12_EEPROM_VERSION);
+        return 0;}
+#else    
+    if (crc || eeprom_read_byte(RF12_EEPROM_ADDR + 2) != RF12_EEPROM_VERSION)
+    {//Serial.print(F("\r\nrf12_configSilent eeprom_read_byte failed "));
+        return 0;}
+#endif
     uint8_t nodeId = 0, group = 0;
     uint16_t frequency = 0;
-
+#if defined (__LGT8FX8P__)
+    nodeId = EEPROM.read((int)RF12_EEPROM_ADDR + 0);
+    group  = EEPROM.read((int)RF12_EEPROM_ADDR + 1);
+    frequency = EEPROM.read((int)RF12_EEPROM_ADDR + 5)<<8; //MSB
+    frequency += EEPROM.read((int)RF12_EEPROM_ADDR + 4);   //LSB    
+#elif defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_MEGAAVR)
     nodeId = eeprom_read_byte(RF12_EEPROM_ADDR + 0);
     group  = eeprom_read_byte(RF12_EEPROM_ADDR + 1);
     frequency = eeprom_read_word((uint16_t*) (RF12_EEPROM_ADDR + 4));
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)
+    nodeId = EEPROM.read((int)RF12_EEPROM_ADDR + 0);
+    group  = EEPROM.read((int)RF12_EEPROM_ADDR + 1);
+    frequency = EEPROM.read((int)RF12_EEPROM_ADDR + 5)<<8; //MSB
+    frequency += EEPROM.read((int)RF12_EEPROM_ADDR + 4);   //LSB
+#elif defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+    nodeId 	= EEPROM.read( 0);
+    group	= EEPROM.read( 1);
+    frequency  = EEPROM.read(5)<<8; //MSB
+    frequency |= EEPROM.read(4);				//LSB       
 
+#else
+    nodeId = eeprom_read_byte(RF12_EEPROM_ADDR + 0);
+    group  = eeprom_read_byte(RF12_EEPROM_ADDR + 1);
+    frequency = eeprom_read_word((uint16_t*) (RF12_EEPROM_ADDR + 4));
+#endif    
     rf12_initialize(nodeId, nodeId >> 6, group, frequency);
     return nodeId & RF12_HDR_MASK;
 }
@@ -745,10 +1364,31 @@ uint8_t rf12_configSilent () {
 /// This replaces rf12_config(0), to be called after rf12_configSilent(). Can be
 /// used to avoid pulling in the Serial port code in cases where it's not used.
 void rf12_configDump () {
+#if defined (__LGT8FX8P__)
+    uint8_t nodeId = EEPROM.read((int)RF12_EEPROM_ADDR);
+    uint8_t flags = EEPROM.read((int)RF12_EEPROM_ADDR + 3);
+    uint16_t  freq = EEPROM.read((int)RF12_EEPROM_ADDR + 5)<<8; //MSB
+    freq += EEPROM.read((int)RF12_EEPROM_ADDR + 4);				//LSB  
+#elif defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_MEGAAVR)
     uint8_t nodeId = eeprom_read_byte(RF12_EEPROM_ADDR);
     uint8_t flags = eeprom_read_byte(RF12_EEPROM_ADDR + 3);
-    uint16_t freq = eeprom_read_word((uint16_t*) (RF12_EEPROM_ADDR + 4));
-
+    uint16_t freq = eeprom_read_word((uint16_t*) (RF12_EEPROM_ADDR + 4));	
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)
+    uint8_t nodeId = EEPROM.read((int)RF12_EEPROM_ADDR);
+    uint8_t flags = EEPROM.read((int)RF12_EEPROM_ADDR + 3);
+    uint16_t  freq = EEPROM.read((int)RF12_EEPROM_ADDR + 5)<<8; //MSB
+    freq += EEPROM.read((int)RF12_EEPROM_ADDR + 4);				//LSB
+#elif defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+    uint8_t nodeId = EEPROM.read(0);
+    uint8_t flags = EEPROM.read(3);
+    uint16_t  freq  = EEPROM.read(5)<<8; //MSB
+    		  freq += EEPROM.read(4);				//LSB    
+  		  
+#else
+    uint8_t nodeId = eeprom_read_byte(RF12_EEPROM_ADDR);
+    uint8_t flags = eeprom_read_byte(RF12_EEPROM_ADDR + 3);
+    uint16_t freq = eeprom_read_word((uint16_t*) (RF12_EEPROM_ADDR + 4));	
+#endif
     // " A i1 g178 @ 868 MHz "
     Serial.print(' ');
     Serial.print((char) ('@' + (nodeId & RF12_HDR_MASK)));
@@ -757,7 +1397,17 @@ void rf12_configDump () {
     if (flags & 0x04)
         Serial.print('*');
     Serial.print(" g");
-    Serial.print(eeprom_read_byte(RF12_EEPROM_ADDR + 1));
+#if defined (__LGT8FX8P__)
+    Serial.print(EEPROM.read((int)RF12_EEPROM_ADDR + 1),DEC);	    
+#elif defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_MEGAAVR)
+    Serial.print(eeprom_read_byte(RF12_EEPROM_ADDR + 1));    
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)
+    Serial.print(EEPROM.read((int)RF12_EEPROM_ADDR + 1),DEC);
+#elif defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+	Serial.print(EEPROM.read(1), DEC);
+#else
+   Serial.print(eeprom_read_byte(RF12_EEPROM_ADDR + 1));  
+#endif  
     Serial.print(" @ ");
     uint8_t band = nodeId >> 6;
     Serial.print(band == RF12_433MHZ ? 433 :
@@ -960,8 +1610,19 @@ void rf12_setRawRecvMode(uint8_t fixed_pkt_len) {
 #define DELTA 0x9E3779B9
 #define MX (((z>>5^y<<2) + (y>>3^z<<4)) ^ ((sum^y) + \
                                             (cryptKey[(uint8_t)((p&3)^e)] ^ z)))
-
-static void cryptFun (uint8_t send) {
+#if defined(ARDUINO_ARCH_AVR)  || defined(ARDUINO_ARCH_MEGAAVR) || defined (__LGT8FX8P__)
+static void cryptFun (uint8_t send) 
+#elif defined(ESP32)
+static void IRAM_ATTR cryptFun (uint8_t send) 
+#elif defined (ESP8266)
+static void ICACHE_RAM_ATTR cryptFun (uint8_t send) 
+#elif defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+static void cryptFun (uint8_t send) 
+#else
+static void cryptFun (uint8_t send) 
+#endif
+//static void cryptFun (uint8_t send) 
+{
     uint32_t y, z, sum, *v = (uint32_t*) rf12_data;
     uint8_t p, e, rounds = 6;
 
@@ -1036,11 +1697,33 @@ static void cryptFun (uint8_t send) {
 ///            value to use, as defined in the include file, but another address
 ///            can be specified if needed.
 /// @see http://jeelabs.org/2010/02/23/secure-transmissions/
-void rf12_encrypt (const uint8_t* key) {
+
+#if defined(ARDUINO_ARCH_AVR) || defined(ARDUINO_ARCH_MEGAAVR) || defined (__LGT8FX8P__)
+	void rf12_encrypt (const uint8_t* key) 
+#elif defined (ESP32)
+	void IRAM_ATTR rf12_encrypt (const uint8_t* key) 
+#elif defined (ESP8266)
+	void ICACHE_RAM_ATTR rf12_encrypt (const uint8_t* key)
+#elif defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+	void rf12_encrypt (const uint8_t* key) 
+#else
+	void rf12_encrypt (const uint8_t* key) 
+#endif
+{
     // by using a pointer to cryptFun, we only link it in when actually used
     if (key != 0) {
         for (uint8_t i = 0; i < sizeof cryptKey; ++i)
-            ((uint8_t*) cryptKey)[i] = eeprom_read_byte(key + i);
+#if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)
+            {((uint8_t*) cryptKey)[i] = EEPROM.read((int)key + i);}
+#elif defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+	       // {((uint8_t*) cryptKey)[i] = EEPROM.PageBase0 + 1;}   
+	        {((uint8_t*) cryptKey)[i] = EEPROM.read((int)key + 1);} 
+#elif defined (__LGT8FX8P__)
+	        {((uint8_t*) cryptKey)[i] = EEPROM.read((int)key + i);} 
+	        //{((uint8_t*) cryptKey)[i] = EECR.read((int)key + i);} 
+#else            
+            {((uint8_t*) cryptKey)[i] = eeprom_read_byte(key + i);}
+#endif            
         crypter = cryptFun;
     } else
         crypter = 0;

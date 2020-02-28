@@ -3,8 +3,16 @@
 // 2009-02-13 <jc@wippler.nl> http://opensource.org/licenses/mit-license.php
 
 #include "Ports.h"
-#include <avr/sleep.h>
-#include <util/atomic.h>
+#if defined(ARDUINO_ARCH_AVR)
+	#include <avr/sleep.h>
+	#include <util/atomic.h>
+#elif defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32) || defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+#else
+	#include <avr/sleep.h>
+	#include <util/atomic.h>
+#endif
+
+
 
 // #define DEBUG_DHT 1 // add code to send info over the serial port of non-zero
 
@@ -508,6 +516,10 @@ WRITE_RESULT UartPlug::write (byte data) {
 #endif
 }
 
+#if defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+
+#else
+
 void DimmerPlug::begin () {
     setReg(MODE1, 0x00);     // normal
     setReg(MODE2, 0x14);     // inverted, totem-pole
@@ -543,6 +555,8 @@ void DimmerPlug::setMulti(byte reg, ...) const {
     }
     stop();
 }
+
+#endif
 
 /** Set the gain mode of the 16x multiplier in the LuxPlug.
  *  @param high	Multiplier is off if 0, otherwise on.
@@ -654,6 +668,9 @@ char GravityPlug::temperature() {
  *  @param channel A number between 0..15.
  */
 void InputPlug::select(uint8_t channel) {
+	#if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32) || defined(MCU_STM32F103C8) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103CB) || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+		//#write "Input plug is not supported with ESP8266"
+	#else
     digiWrite(0);
     mode(OUTPUT);
 
@@ -676,6 +693,7 @@ void InputPlug::select(uint8_t channel) {
             delayMicroseconds(slow ? 32 : 4);
         }
     }
+    #endif
 }
 
 byte HeadingBoard::eepromByte(byte reg) const {
@@ -686,17 +704,17 @@ byte HeadingBoard::eepromByte(byte reg) const {
     eeprom.stop();
     return result;
 }
-
+// Replaced "C1" with "CC1" due compiler errors lgt\avr\variants\standard\pins_arduino.h:110:12:
 void HeadingBoard::getConstants() {
     for (byte i = 0; i < 18; ++i)
-        ((byte*) &C1)[i < 14 ? i^1 : i] = eepromByte(16 + i);
-    // Serial.println(C1);
-    // Serial.println(C2);
-    // Serial.println(C3);
-    // Serial.println(C4);
-    // Serial.println(C5);
-    // Serial.println(C6);
-    // Serial.println(C7);
+        ((byte*) &CC1)[i < 14 ? i^1 : i] = eepromByte(16 + i);
+    // Serial.println(CC1);
+    // Serial.println(CC2);
+    // Serial.println(CC3);
+    // Serial.println(CC4);
+    // Serial.println(CC5);
+    // Serial.println(CC6);
+    // Serial.println(CC7);
     // Serial.println(A, DEC);
     // Serial.println(B, DEC);
     // Serial.println(C, DEC);
@@ -737,32 +755,36 @@ void HeadingBoard::begin() {
     
     getConstants();
 }
-
+// Replaced "C1" with "CC1" due compiler errors lgt\avr\variants\standard\pins_arduino.h:110:12:
+// Replaced "D2" with "DK2" due compiler errors lgt\avr\variants\standard\pins_arduino.h:110:12:
 void HeadingBoard::pressure(int& temp, int& pres) const {
-    word D2 = adcValue(0);
-    // Serial.print("D2 = ");
-    // Serial.println(D2);
-    int corr = (D2 - C5) >> 7;        
+    word DK2 = adcValue(0);
+    //uint16_t DK2 = adcValue(0);
+    // Serial.print("DK2 = ");
+    // Serial.println(DK2);
+    int corr = (DK2 - CC5) >> 7;        
     // Serial.print("corr = ");
     // Serial.println(corr);
-    int dUT = (D2 - C5) - (corr * (long) corr * (D2 >= C5 ? A : B) >> C);
+    int dUT = (DK2 - CC5) - (corr * (long) corr * (DK2 >= CC5 ? A : B) >> C);
     // Serial.print("dUT = ");
     // Serial.println(dUT);
-    temp = 250 + ((long) dUT * C6 >> 16) - (dUT >> D); 
-
-    word D1 = adcValue(1);
-    // Serial.print("D1 = ");
-    // Serial.println(D1);
-    word OFF = (C2 + ((C4 - 1024) * dUT >> 14)) << 2;
+    temp = 250 + ((long) dUT * CC6 >> 16) - (dUT >> D); 
+    
+// Replaced "D1" with "DK1" due compiler errors lgt\avr\variants\standard\pins_arduino.h:110:12:
+    word DK1 = adcValue(1);
+    //uint16_t DK1 = adcValue(1);
+    // Serial.print("DK1 = ");
+    // Serial.println(DK1);
+    word OFF = (CC2 + ((CC4 - 1024) * dUT >> 14)) << 2;
     // Serial.print("OFF = ");
     // Serial.println(OFF);
-    word SENS = C1 + (C3 * dUT >> 10);
+    word SENS = CC1 + (CC3 * dUT >> 10);
     // Serial.print("SENS = ");
     // Serial.println(SENS);
-    word X = (SENS * (D1 - 7168L) >> 14) - OFF;
+    word X = (SENS * (DK1 - 7168L) >> 14) - OFF;
     // Serial.print("X = ");
     // Serial.println(X);
-    pres = (X * 10L >> 5) + C7;
+    pres = (X * 10L >> 5) + CC7;
 }
 
 void HeadingBoard::heading(int& xaxis, int& yaxis) {
@@ -857,6 +879,9 @@ void InfraredPlug::poll() {
 }
 
 uint8_t InfraredPlug::done() {
+		#if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32) || defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) || defined(STM32F103xB)
+		//#write "Infrared plug is not supported by ESP8266. Maybe some one writes a driver..."
+	#else
     byte result = 0;
     if (fill > 0)
         ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -868,6 +893,7 @@ uint8_t InfraredPlug::done() {
     else if (fill < -1)
         fill = -1; // second call to done() release buffer again for capture
     return result;
+    #endif
 }
 
 uint8_t InfraredPlug::decoder(uint8_t nibbles) {
@@ -988,7 +1014,8 @@ bool DHTxx::reading (int& temp, int &humi, bool precise) {
   digitalWrite(pin, LOW);
   delay(18);
   
-  cli();
+  noInterrupts();
+  //cli();
   
   digitalWrite(pin, HIGH);
   delayMicroseconds(30);
@@ -1013,7 +1040,9 @@ bool DHTxx::reading (int& temp, int &humi, bool precise) {
 #endif
     // if no transition was seen, return 
     if (timer >= 250) {
-      sei();
+     interrupts(); 
+      //sei();
+      
       return false;
     }
     // collect each bit in the data buffer
@@ -1021,8 +1050,8 @@ bool DHTxx::reading (int& temp, int &humi, bool precise) {
     data[offset] <<= 1;
     data[offset] |= timer > 7;
   }
-  
-  sei();
+  interrupts(); 
+  //sei();
 
 #if DEBUG_DHT
   Serial.print("DHT");
@@ -1102,6 +1131,9 @@ static volatile byte watchdogCounter;
 static byte backupMode = 0;
 
 void Sleepy::watchdogInterrupts (char mode) {
+	#if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32) || defined(MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6) 	|| defined(MCU_STM32F103RB) || defined(STM32F103xB)	|| defined(ARDUINO_ARCH_MEGAAVR)
+		//#write "Watchdog interrupt not supported by ESP8266. Maybe some one writes a driver..."
+    #else	
 #ifndef WDTCSR
 #define WDTCSR WDTCR
 #endif
@@ -1110,17 +1142,23 @@ void Sleepy::watchdogInterrupts (char mode) {
         mode ^= bit(3) | bit(WDP3);
     // pre-calculate the WDTCSR value, can't do it inside the timed sequence
     // we only generate interrupts, no reset
-    byte wdtcsr = mode >= 0 ? ( bit(WDE) & WDTCSR ) | bit(WDIE) | mode : backupMode;
+    byte wdtcsr = mode >= 0 ? bit(WDIE) | mode : backupMode;
     if(mode>=0) backupMode = WDTCSR;
     MCUSR &= ~(1<<WDRF);
     ATOMIC_BLOCK(ATOMIC_FORCEON) {
         WDTCSR |= (1<<WDCE) | (1<<WDE); // timed sequence
         WDTCSR = wdtcsr;
     }
+
+    #endif
 }
 
 /// @see http://www.nongnu.org/avr-libc/user-manual/group__avr__sleep.html
 void Sleepy::powerDown () {
+	
+#if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32) || defined (MCU_STM32F103C8) || defined(MCU_STM32F103CB) || defined(MCU_STM32F103CBT6)  || defined(MCU_STM32F103RB) || defined(STM32F103xB) || defined(ARDUINO_ARCH_MEGAAVR)
+		//#write "powerDown not supported (ESP8266). Maybe some one writes a driver..."
+#elif defined(ARDUINO_ARCH_AVR)
     byte adcsraSave = ADCSRA;
     ADCSRA &= ~ bit(ADEN); // disable the ADC
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -1136,6 +1174,8 @@ void Sleepy::powerDown () {
     sleep_disable();
     // re-enable what we disabled
     ADCSRA = adcsraSave;
+#else
+#endif
 }
 
 /// This method waits Serial to send data via UART before powering down.
@@ -1168,7 +1208,7 @@ byte Sleepy::loseSomeTime (word msecs) {
         msleft -= halfms;
     }
     // adjust the milli ticks, since we will have missed several
-#if defined(__AVR_ATtiny84__) || defined(__AVR_ATtiny85__) || defined (__AVR_ATtiny44__) || defined (__AVR_ATtiny45__) || defined (__AVR_ATtiny88__)
+#if defined(__AVR_ATtiny84__) || defined(__AVR_ATtiny85__) || defined (__AVR_ATtiny44__) || defined (__AVR_ATtiny45__) || defined (_AVR_ATTINY88_)
     extern volatile unsigned long millis_timer_millis;
     millis_timer_millis += msecs - msleft;
 #else

@@ -6,7 +6,12 @@
 
 #include <Ports.h>
 #include "PortsSHT11.h"
-#include <avr/pgmspace.h>
+#if defined (ESP8266) || defined  (ESP8266_GENERIC) || defined  (ESP32)
+	#include <pgmspace.h>
+#else
+	#include <avr/pgmspace.h>
+#endif
+
 #if ARDUINO>=100
 #include <Arduino.h> // Arduino 1.0
 #else
@@ -18,7 +23,7 @@ enum {
     MEASURE_HUMI = 0x05,
     STATUS_REG_W = 0x06,
     STATUS_REG_R = 0x07,
-    RESET        = 0x1e,
+    RESET_SHT11  = 0x1e, //Renamed RESET_to  RESET_SHT11 due compiler errors with STM32 official library
 };
 
 const static uint8_t crcTab [] PROGMEM = {
@@ -134,7 +139,7 @@ void SHT11::connReset() const {
 
 void SHT11::softReset() const {
     connReset();
-    writeByte(RESET);
+    writeByte(RESET_SHT11);
     delay(11);
 }
 
@@ -190,16 +195,16 @@ uint8_t SHT11::measure(uint8_t type, void (*delayFun)()) {
  *  @param t_C Variable to store the temperature in degree celcius into.
  */
 void SHT11::calculate(float& rh_true, float& t_C) const {
-    const float C1=-2.0468;
-    const float C2= 0.0367;
-    const float C3=-1.5955e-6;
+    const float CC1=-2.0468;
+    const float CC2= 0.0367;
+    const float CC3=-1.5955e-6;
     const float T1=0.01;
     const float T2=0.00008;
 
     t_C = meas[TEMP] * 0.01 - 39.66;  // for 3.3 V
 
     float rh = meas[HUMI];
-    rh_true = (t_C-25)*(T1+T2*rh) + C3*rh*rh + C2*rh + C1;
+    rh_true = (t_C-25)*(T1+T2*rh) + CC3*rh*rh + CC2*rh + CC1;
     if (rh_true > 99) rh_true = 100;
     if (rh_true < 0.1) rh_true = 0.1;
 } 

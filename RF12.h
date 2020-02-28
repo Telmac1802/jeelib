@@ -9,8 +9,12 @@
 // Modify the RF12 driver in such a way that it can inter-operate with RFM69
 // modules running in "native" mode. This affects packet layout and some more.
 #define RF12_COMPAT 0
-
+//#define JEELIB_SPI1 1 //set true if using SPI1. False or 0 if SPI or SPI0 (default). 
+//#define RF69_COMPAT 1 //set true if using SPI1 and RFM69CW radio. No need if controller hawe only one SPI
+#define HALLARD 1 	// if using Hallards RFM12B/RFM69CW module. Diffrent IRQ=15  and SS = 16 
+					//https://github.com/hallard/WeMos-RFM69
 #include <stdint.h>
+
 
 /// RFM12B Protocol version.
 /// Version 1 did not include the group code in the crc.

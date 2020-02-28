@@ -7,6 +7,7 @@ namespace RF69 {
     extern uint8_t  node;
     extern uint8_t  rssi;
 
+	void setPowerLevel(uint8_t powerLevel); //3.1.2020 
     void setFrequency (uint32_t freq);
     bool canSend ();
     bool sending ();
