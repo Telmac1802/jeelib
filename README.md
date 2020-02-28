@@ -8,7 +8,7 @@ The home page for this library is at <https://jeelabs.net/projects/jeelib/wiki>.
 [2]: https://jeelabs.org/
 
 
-Jeelib library is forked to use Arduino SPI library with radios RFM12b and RFM69CW. 
+This jeelib library is forked to use Arduino SPI library with radios RFM12b and RFM69CW. 
 Included example RF12demo_SPI.ino (a modified RF12demo.ino) is working on boards or microcontrollers: 
   Jeenode, Arduino Uno, Arduino Nano, Arduino Mini Pro, Arduino ATmega 2560,
   
