@@ -29,7 +29,8 @@ Included example RF12demo_SPI.ino (a modified RF12demo.ino) is working on boards
   
   STM32 (official) core https://github.com/stm32duino/BoardManagerFiles/raw/master/STM32/package_stm_index.json.
 
-Other MCUs than AVR dont have dedicated EEPROM and dont restore radio settings when programin with a different sketch.
+Other MCUs than AVR dont have dedicated EEPROM and dont restore radio settings when programing with a different sketch. 
+An extern EEPROM is not supported either.
 
 Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports.h, Ports.cpp, PortsSHT11.cpp. 
 Added files to JeeLib: RF69_avr1.h and crc16.h.
