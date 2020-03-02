@@ -2,7 +2,7 @@
 #include <RF69.h>
 
 //#define JEELIB_SPI1 1 //if using SPI1 and RFM69CW, otherwice compiler error of multiple defined hspi or not defined at all
-#define HALLARD 1 	// if using Hallards RFM12B/RFM69CW module. Diffrent IRQ=16  and SS = 16 
+//#define HALLARD 1 	// if using Hallards RFM12B/RFM69CW module. Diffrent IRQ=16  and SS = 16 
 					//https://github.com/hallard/WeMos-RFM69
 					
 #if JEELIB_SPI1  //true if using  SPI1. False if SPI or SPI0. 
