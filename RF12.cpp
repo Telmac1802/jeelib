@@ -1166,6 +1166,7 @@ uint8_t rf12_initialize (uint8_t id, uint8_t band, uint8_t g, uint16_t f) {
     //#if defined(HALLARD)
     //while (digitalRead(RFM_IRQ) == 1) // Atmega328PB SPI1 hangs on this while 081119
     //#else
+	pinMode(RFM_IRQ,INPUT);
     while (digitalRead(RFM_IRQ) == 0) // Atmega328PB SPI1 hangs on this while 081119
     //#endif
     rf12_xfer(0x0000);
@@ -1244,7 +1245,6 @@ uint8_t rf12_initialize (uint8_t id, uint8_t band, uint8_t g, uint16_t f) {
     }  
  #endif
  #endif
- 	pinMode(RFM_IRQ,INPUT);
     return nodeid;
 }
 
