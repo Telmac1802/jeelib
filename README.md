@@ -36,7 +36,7 @@ Modified files in JeeLib: RF12.cpp, RF69.cpp, RF69_compat.cpp, RF69_avr.h, Ports
 Added files to JeeLib: RF69_avr1.h and crc16.h.
 
 Original JeeLib support continue to JeeNode and atmega328PA. Due errors in compiling Ports.cpp to other MCU:s there is no
-or partial support to LuxPlug, ColorPlug, InputPlug, InfraredPlug, Sleep modes and PowerDown, -Saving. Not tryed  
+or partial support to LuxPlug, ColorPlug, InputPlug, InfraredPlug, Sleep modes and PowerDown, -Saving. Not tried  
 Jeelabs module working with other MCU than ATMefa328PA.
 
 Main goal to use radio modules RFM12b and RFM69CW with different microcontrollers.
